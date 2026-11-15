@@ -1,0 +1,117 @@
+
+pipeline {
+    agent any
+
+    environment {
+        VIRTUAL_ENV = 'venv'
+    }
+
+    stages {
+
+        stage('Setup') {
+            steps {
+                powershell '''
+                    $ErrorActionPreference = "Stop"
+
+                    if (!(Test-Path "$env:VIRTUAL_ENV\\Scripts\\python.exe")) {
+                        python -m venv $env:VIRTUAL_ENV
+                        if ($LASTEXITCODE -ne 0) {
+                            throw "Virtual environment creation failed"
+                        }
+                    }
+
+                    & "$env:VIRTUAL_ENV\\Scripts\\python.exe" -m pip install -r requirements.txt
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Dependency installation failed"
+                    }
+                '''
+            }
+        }
+
+        stage('Lint') {
+            steps {
+                powershell '''
+                    & "$env:VIRTUAL_ENV\\Scripts\\python.exe" -m flake8 app.py tests
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Lint stage failed"
+                    }
+                '''
+            }
+        }
+
+        stage('Test') {
+            steps {
+                powershell '''
+                    & "$env:VIRTUAL_ENV\\Scripts\\python.exe" -m pytest tests/ -v
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Tests failed"
+                    }
+                '''
+            }
+        }
+
+        stage('Coverage') {
+            steps {
+                powershell '''
+                    & "$env:VIRTUAL_ENV\\Scripts\\python.exe" -m coverage run --source=app -m pytest tests/
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Coverage tests failed"
+                    }
+
+                    & "$env:VIRTUAL_ENV\\Scripts\\python.exe" -m coverage report -m
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Coverage report failed"
+                    }
+
+                    & "$env:VIRTUAL_ENV\\Scripts\\python.exe" -m coverage html
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "HTML coverage report failed"
+                    }
+                '''
+            }
+        }
+
+        stage('Security Scan') {
+            steps {
+                powershell '''
+                    & "$env:VIRTUAL_ENV\\Scripts\\python.exe" -m bandit -r app.py
+
+                    if ($LASTEXITCODE -ne 0) {
+                        throw "Security scan failed"
+                    }
+                '''
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                powershell '''
+                    & .\\deploy.ps1
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo 'CI/CD Pipeline completed successfully!'
+        }
+
+        failure {
+            echo 'CI/CD Pipeline failed. Check the console output.'
+        }
+
+        always {
+            archiveArtifacts artifacts: 'htmlcov/**,deployed_app/**',
+                allowEmptyArchive: true
+
+            cleanWs()
+        }
+    }
+}
